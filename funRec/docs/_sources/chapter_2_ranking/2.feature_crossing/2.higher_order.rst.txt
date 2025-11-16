@@ -1,0 +1,297 @@
+
+.. _higher_order_feature_crossing:
+
+高阶特征交叉
+============
+
+
+前面我们学了各种二阶特征交叉技术，这些模型能够明确地处理二阶交互，但对于更高阶的特征组合，它们主要靠深度神经网络来学习。深度网络虽然能学到高阶交互，但我们不知道它具体学到了什么，也不清楚这些交互是怎么影响预测的。所以研究者们想：能不能像
+FM 处理二阶交叉那样，设计出能够\ **明确捕捉高阶交叉**\ 的网络结构？
+
+DCN: 残差连接的高阶交叉
+-----------------------
+
+为了解决上述问题，Deep & Cross Network (DCN) :cite:`wang2017deep`
+用Cross Network替代了Wide & Deep模型中的Wide部分。Cross
+Network在每一层都会与原始输入特征做交叉，这样就能明确地学到高阶特征交互，减少了手工特征工程的工作。
+
+.. _dcn_model_structure:
+
+.. figure:: ../../img/deepcross.png
+   :width: 400px
+
+   DCN模型结构
+
+
+
+DCN的整体结构由并行的Cross Network和Deep
+Network两部分组成，它们共享相同的Embedding层输入。首先，模型将稀疏的类别特征转换为低维稠密的Embedding向量，并与数值型特征拼接在一起，形成统一的输入向量
+:math:`\mathbf{x}_0`\ 。
+
+.. math:: \mathbf{x}_0 = [\mathbf{x}_{\text{embed}, 1}^T, \ldots, \mathbf{x}_{\text{embed}, k}^T, \mathbf{x}_{\text{dense}}^T]
+
+这个初始向量 :math:`\mathbf{x}_0` 会被同时送入Cross Network和Deep
+Network。
+
+Cross
+Network是DCN的核心创新。它由多个交叉层堆叠而成，其精妙之处在于每一层的计算都保留了与原始输入
+:math:`\mathbf{x}_0` 的直接交互。第 :math:`l+1` 层的计算公式如下：
+
+.. math:: \mathbf{x}_{l+1} = \mathbf{x}_0 \mathbf{x}_l^T \mathbf{w}_l + \mathbf{b}_l + \mathbf{x}_l
+
+其中\ :math:`\mathbf{x}_l, \mathbf{x}_{l+1} \in \mathbb{R}^d` 分别是第
+:math:`l` 层和第 :math:`l+1`
+层的输出列向量，\ :math:`\mathbf{x}_0 \in \mathbb{R}^d` 是Cross
+Network的初始输入向量，\ :math:`\mathbf{w}_l, \mathbf{b}_l \in \mathbb{R}^d`
+分别是第 :math:`l` 层的权重和偏置列向量。
+
+.. _cross_network_structure:
+
+.. figure:: ../../img/cross_network.png
+   :width: 300px
+
+   Cross Network
+
+
+
+这个结构其实就是残差网络。每一层都在上一层输出 :math:`\mathbf{x}_l`
+的基础上，加了一个交叉项
+:math:`\mathbf{x}_0 \mathbf{x}_l^T \mathbf{w}_l` 和偏置项
+:math:`\mathbf{b}_l`\ 。交叉项很重要，它让原始输入 :math:`\mathbf{x}_0`
+和当前层输入 :math:`\mathbf{x}_l`
+做特征交叉。层数越深，\ **特征交叉的阶数就越高**\ 。比如第一层（\ :math:`l=0`\ ）时，\ :math:`\mathbf{x}_1`
+包含二阶交叉项；第二层（\ :math:`l=1`\ ）时，\ :math:`\mathbf{x}_1`
+本身就有二阶信息，再和 :math:`\mathbf{x}_0`
+交叉就产生三阶交叉项。所以Cross
+Network有多深，就能学到多高阶的特征交叉。而且参数量只和输入维度成正比，很高效。
+
+与Cross Network并行的Deep
+Network部分是一个标准的全连接神经网络，用于隐式地学习高阶非线性关系，其结构与我们熟悉的DeepFM中的DNN部分类似。最后，模型将Cross
+Network的输出 :math:`\mathbf{x}_{L_1}` 和Deep Network的输出
+:math:`\mathbf{h}_{L_2}`
+拼接起来，通过一个逻辑回归层得到最终的预测概率。
+
+.. math:: \mathbf{p} = \sigma([\mathbf{x}_{L_1}^T, \mathbf{h}_{L_2}^T] \mathbf{w}_{\text{logits}})
+
+DCN用Cross
+Network明确地学习高阶特征交叉，再配合DNN学习复杂的非线性关系，这样就能更好地处理特征组合问题。
+
+xDeepFM: 向量级别的特征交互
+---------------------------
+
+DCN虽然能明确地学习高阶特征交叉，但它是在 **元素级别(bit-wise)**
+上做交叉的。也就是说，Embedding向量中的每个元素都单独和其他特征的元素交互，这样就把Embedding向量拆散了，没有把它当作一个完整的特征来看待。为了解决这个问题，xDeepFM提出了压缩交互网络（Compressed
+Interaction Network, CIN） :cite:`lian2018xdeepfm` ，改为在
+**向量级别(vector-wise)**
+上做特征交互，这样更符合我们的直觉。xDeepFM包含三个部分：线性部分、DNN部分（隐式高阶交叉）和CIN网络（显式高阶交叉），最后把三部分的输出合并得到预测结果。
+
+.. _xdeepfm_architecture:
+
+.. figure:: ../../img/xdeepfm.png
+   :width: 400px
+
+   xdDeepFM模型架构
+
+
+
+CIN的设计目标是实现向量级别的显式高阶交互，同时控制网络复杂度。它的输入是一个\ :math:`m \times D`\ 的矩阵
+:math:`\mathbf{X}_0`\ ，其中 :math:`m`
+是特征域（Field）的数量，\ :math:`D` 是Embedding的维度，矩阵的第
+:math:`i` 行就是第 :math:`i` 个特征域的Embedding向量
+:math:`\mathbf{e}_i`\ 。
+
+CIN的计算过程在每一层都分为两步。在计算第 :math:`k` 层的输出
+:math:`\mathbf{X}_k` 时，它依赖于上一层的输出 :math:`\mathbf{X}_{k-1}`
+和最原始的输入 :math:`\mathbf{X}_0`\ 。
+
+第一步，模型计算出上一层输出的 :math:`H_{k-1}` 个向量与原始输入层的
+:math:`m`
+个向量之间的所有成对交互，生成一个中间结果。具体来说，是通过哈达玛积（Hadamard
+product）\ :math:`\circ` 来实现的。这个操作会产生
+:math:`H_{k-1} \times m` 个交互向量，每个向量的维度仍然是 :math:`D`\ 。
+
+第二步，为了生成第 :math:`k` 层的第 :math:`h` 个新特征向量
+:math:`\mathbf{X}_{h,*}^k`\ ，模型对上一步产生的所有交互向量进行加权求和。这个过程可以看作是对所有潜在的交叉特征进行一次“压缩”或“提炼”。
+
+综合起来，其核心计算公式如下：
+
+.. math:: \mathbf{X}_{h,*}^k = \sum_{i=1}^{H_{k-1}} \sum_{j=1}^{m} \mathbf{W}_{i,j}^{k,h} (\mathbf{X}_{i,*}^{k-1} \circ \mathbf{X}_{j,*}^0)
+
+其中：
+
+-  :math:`\mathbf{X}_k \in \mathbb{R}^{H_k \times D}` 是CIN第 :math:`k`
+   层的输出，可以看作是一个包含了 :math:`H_k`
+   个特征向量的集合，称为“特征图”。\ :math:`H_k` 是第 :math:`k`
+   层特征图的数量。
+
+-  :math:`\mathbf{X}_{i,*}^{k-1}` 是第 :math:`k-1` 层输出的第 :math:`i`
+   个 :math:`D` 维向量。
+
+-  :math:`\mathbf{X}_{j,*}^0` 是原始输入矩阵的第 :math:`j` 个 :math:`D`
+   维向量（即第 :math:`j` 个特征域的Embedding）。
+
+-  :math:`\circ` 是哈达玛积，它实现了\ **向量级别的交互**\ ，保留了
+   :math:`D` 维的向量结构。
+
+-  :math:`\mathbf{W}_{k,h} \in \mathbb{R}^{H_{k-1} \times m}`
+   是一个参数矩阵。它为每一个由
+   :math:`(\mathbf{X}_{i,*}^{k-1}, \mathbf{X}_{j,*}^0)`
+   产生的交互向量都提供了一个权重，通过加权求和的方式，将
+   :math:`H_{k-1} \times m` 个交互向量的信息“压缩”成一个全新的 :math:`D`
+   维向量 :math:`\mathbf{X}_{h,*}^k`\ 。
+
+这个过程清晰地展示了特征交互是如何在向量级别上逐层发生的。第 :math:`k`
+层的输出 :math:`\mathbf{X}_k` 包含了所有 :math:`k+1` 阶的特征交互信息。
+
+在计算出每一层（从第\ :math:`1`\ 层到第\ :math:`T`\ 层）的特征图
+:math:`\mathbf{X}_k` 后，CIN会对每个特征图 :math:`\mathbf{X}_k`
+的所有向量（\ :math:`H_k`\ 个）在维度 :math:`D` 上进行求和池化（Sum
+Pooling），得到一个池化后的向量
+:math:`\mathbf{p}_k \in \mathbb{R}^{H_k}`\ 。最后，将所有层的池化向量拼接起来，形成CIN部分的最终输出。
+
+.. math:: \mathbf{p}^+ = [\mathbf{p}_1, \mathbf{p}_2, \ldots, \mathbf{p}_T]
+
+这个输出 :math:`\mathbf{p}^+` 捕获了从二阶到 :math:`T+1`
+阶的所有显式、向量级别的交叉特征信息。最终，xDeepFM将线性部分、DNN部分和CIN部分的输出结合起来，通过一个Sigmoid函数得到最终的预测结果。
+
+.. math:: \hat{y} = \sigma(\mathbf{w}_{\text{linear}}^T \mathbf{a} + \mathbf{w}_{\text{dnn}}^T \mathbf{x}_{\text{dnn}}^k + \mathbf{w}_{\text{cin}}^T \mathbf{p}^+ + \mathbf{b})
+
+其中\ :math:`\mathbf{a}`
+表示原始特征，\ :math:`\mathbf{x}_{\text{dnn}}^k`
+表示DNN的输出，\ :math:`\mathbf{b}` 是可学习参数。
+
+通过CIN网络，\ **xDeepFM把向量级别的显式交互和元素级别的隐式交互结合到了一起**\ ，为高阶特征交互提供了一个更好的解决方案。
+
+AutoInt: 自注意力的自适应交互
+-----------------------------
+
+DCN用残差连接做元素级别的高阶交互，xDeepFM用CIN网络做向量级别的高阶交互，但这两种方法都有个问题：交互方式比较固定。DCN每一层都要和原始输入交叉，xDeepFM的CIN网络也是按固定方式做向量交互。那么，\ **能不能设计一种更灵活的高阶特征交互方法，让模型自己决定哪些特征要交互，交互强度多大？**
+
+AutoInt (Automatic Feature Interaction) :cite:`song2019autoint`
+通过Transformer的自注意力机制，\ **让模型自动学习各种阶数的特征交互**\ 。和前面的方法不同，AutoInt不用固定的交互模式，而是在训练中学出最好的特征交互组合。
+
+.. _autoint_overview:
+
+.. figure:: ../../img/autoint_overview.png
+   :width: 400px
+
+   AutoInt模型原理示意图
+
+
+
+AutoInt
+的整体架构相对简洁，它将所有输入特征（无论是类别型还是数值型）都转换为相同维度的嵌入向量
+:math:`\mathbf{e}_m \in \mathbb{R}^d`\ ，其中 :math:`m` 代表第 :math:`m`
+个特征域。这些嵌入向量构成了自注意力网络的输入，类似于 Transformer 中的
+Token Embeddings。
+
+**多头自注意力机制**
+
+AutoInt
+的核心是其交互层，该层由多头自注意力机制构成。对于任意两个特征的嵌入向量
+:math:`\mathbf{e}_m` 和
+:math:`\mathbf{e}_k`\ ，自注意力机制会计算它们之间的相关性得分。这个过程在每个“注意力头”（Head）
+:math:`h` 中独立进行。具体来说，对于特征 :math:`m` 和特征
+:math:`k`\ ，它们在第 :math:`h` 个注意力头中的相关性得分
+:math:`\alpha_{m,k}^{(h)}` 计算如下：
+
+.. math:: \alpha_{m,k}^{(h)} = \frac{\exp(\psi^{(h)}(\mathbf{e}_m, \mathbf{e}_k))}{\sum_{l=1}^{M}\exp(\psi^{(h)}(\mathbf{e}_m, \mathbf{e}_l))}
+
+这里的 :math:`M` 是特征域的总数，而
+:math:`\psi^{(h)}(\mathbf{e}_m, \mathbf{e}_k)`
+是一个用于衡量两个嵌入向量相似度的函数，通常是缩放点积注意力：
+
+.. math::
+
+
+   \psi^{(h)}\left(\mathbf{e}_{\mathbf{m}}, \mathbf{e}_{\mathbf{k}}\right)=\left\langle\mathbf{W}_{\text {Query }}^{(h)} \mathbf{e}_{\mathbf{m}}, \mathbf{W}_{\text {Key }}^{(h)} \mathbf{e}_{\mathbf{k}}\right\rangle
+
+其中
+:math:`\mathbf{W}_{\text{Query}}^{(h)} \in \mathbb{R}^{d' \times d}` 和
+:math:`\mathbf{W}_{\text{Key}}^{(h)} \in \mathbb{R}^{d' \times d}`
+是可学习的投影矩阵，它们分别将原始嵌入向量映射到“查询”（Query）和“键”（Key）空间。\ :math:`d'`
+是投影后的维度。
+
+在计算出所有特征对之间的相关性得分后，模型会利用这些得分来对所有特征的“值”（Value）向量进行加权求和，从而为特征
+:math:`\mathbf{e}_m` 生成一个新的、融合了其他特征信息的表示
+:math:`\mathbf{\tilde{e}}_m^{(h)}`\ ：
+
+.. math:: \mathbf{\tilde{e}}_m^{(h)} = \sum_{k=1}^{M} \alpha_{m,k}^{(h)} (\mathbf{W}_{\text{Value}}^{(h)} \mathbf{e}_k)
+
+其中
+:math:`\mathbf{W}_{\text{Value}}^{(h)} \in \mathbb{R}^{d' \times d}`
+同样是一个可学习的投影矩阵。这个新的表示
+:math:`\mathbf{\tilde{e}}_m^{(h)}`
+本质上就是一个通过自适应学习得到的新组合特征。
+
+.. _autoint_attention:
+
+.. figure:: ../../img/autoint_attention.png
+   :width: 350px
+
+   自注意力机制示意图
+
+
+
+**多层交互与高阶特征学习**
+
+“多头”机制允许模型在不同的子空间中并行地学习不同方面的特征交互。模型将所有
+:math:`H` 个头的输出拼接起来，形成一个更丰富的特征表示：
+
+.. math:: \mathbf{\tilde{e}}_m = \mathbf{\tilde{e}}_m^{(1)} \oplus \mathbf{\tilde{e}}_m^{(2)} \oplus \cdots \oplus \mathbf{\tilde{e}}_m^{(H)}
+
+其中 :math:`\oplus`
+表示拼接操作。为了保留原始信息并稳定训练过程，AutoInt
+还引入了残差连接（Residual
+Connection），将新生成的交互特征与原始特征相结合：
+
+.. math:: \mathbf{e}_m^{\text{Res}}= \text{ReLU}(\mathbf{e}_m + \mathbf{W}_{\text{Res}} \mathbf{\tilde{e}}_m)
+
+其中 :math:`\mathbf{W}_{\text{Res}}` 是一个用于匹配维度的投影矩阵。
+
+**AutoInt
+的关键创新在于其高阶特征交互的构建方式**\ 。通过堆叠多个这样的交互层，AutoInt
+能够显式地构建任意高阶的特征交互。第一层的输出包含了二阶交互信息，第二层的输出则包含了三阶交互信息，以此类推。每一层的输出都代表了更高一阶的、自适应学习到的特征组合。与
+DCN 和 xDeepFM 不同，AutoInt
+中的高阶交互不是通过固定的数学公式构建的，而是通过注意力权重动态决定的，这使得模型能够学习到更加灵活和有效的特征交互模式。
+
+最终，所有层输出的特征表示被拼接在一起，送入一个简单的逻辑回归层进行最终的点击率预测：
+
+.. math::
+
+
+   \hat{y}=\sigma\left(\mathbf{w}^{\mathrm{T}}\left(\mathbf{e}_{1}^{\mathbf{Res}} \oplus \mathbf{e}_{2}^{\mathbf{Res}} \oplus \cdots \oplus \mathbf{e}_{\mathbf{M}}^{\text {Res}}\right)+b\right)
+
+AutoInt 的一个好处是比较好解释，通过看注意力权重矩阵
+:math:`\alpha^{(h)}`\ ，我们能直接看出模型觉得哪些特征组合重要。这种用自注意力做高阶特征交互的方法，不仅让模型表达能力更强，还提供了一种更灵活的学习方式。
+
+**代码实践**
+
+.. raw:: latex
+
+   \diilbookstyleinputcell
+
+.. code:: python
+
+    from funrec import compare_models
+    
+    compare_models(['dcn', 'xdeepfm', 'autoint'])
+
+
+.. raw:: latex
+
+   \diilbookstyleoutputcell
+
+.. parsed-literal::
+    :class: output
+
+    +---------+--------+--------+------------+
+    | 模型    |    auc |   gauc |   val_user |
+    +=========+========+========+============+
+    | dcn     | 0.5996 | 0.5746 |        928 |
+    +---------+--------+--------+------------+
+    | xdeepfm | 0.6012 | 0.5749 |        928 |
+    +---------+--------+--------+------------+
+    | autoint | 0.6087 | 0.5743 |        928 |
+    +---------+--------+--------+------------+
+
